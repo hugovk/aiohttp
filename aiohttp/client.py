@@ -12,15 +12,19 @@ import warnings
 from contextlib import suppress
 from types import SimpleNamespace, TracebackType
 from typing import (
+    TYPE_CHECKING,
     Any,
     Awaitable,
     Callable,
+    Collection,
     Coroutine,
+    Final,
     FrozenSet,
     Generator,
     Generic,
     Iterable,
     List,
+    Literal,
     Mapping,
     Optional,
     Set,
@@ -28,53 +32,48 @@ from typing import (
     Type,
     TypeVar,
     Union,
+    final,
 )
 
 from multidict import CIMultiDict, MultiDict, MultiDictProxy, istr
-from typing_extensions import Final, final
 from yarl import URL
 
 from . import hdrs, http, payload
 from .abc import AbstractCookieJar
 from .client_exceptions import (
-    ClientConnectionError as ClientConnectionError,
-    ClientConnectorCertificateError as ClientConnectorCertificateError,
-    ClientConnectorError as ClientConnectorError,
-    ClientConnectorSSLError as ClientConnectorSSLError,
-    ClientError as ClientError,
-    ClientHttpProxyError as ClientHttpProxyError,
-    ClientOSError as ClientOSError,
-    ClientPayloadError as ClientPayloadError,
-    ClientProxyConnectionError as ClientProxyConnectionError,
-    ClientResponseError as ClientResponseError,
-    ClientSSLError as ClientSSLError,
-    ContentTypeError as ContentTypeError,
-    InvalidURL as InvalidURL,
-    ServerConnectionError as ServerConnectionError,
-    ServerDisconnectedError as ServerDisconnectedError,
-    ServerFingerprintMismatch as ServerFingerprintMismatch,
-    ServerTimeoutError as ServerTimeoutError,
-    TooManyRedirects as TooManyRedirects,
-    WSServerHandshakeError as WSServerHandshakeError,
+    ClientConnectionError,
+    ClientConnectorCertificateError,
+    ClientConnectorError,
+    ClientConnectorSSLError,
+    ClientError,
+    ClientHttpProxyError,
+    ClientOSError,
+    ClientPayloadError,
+    ClientProxyConnectionError,
+    ClientResponseError,
+    ClientSSLError,
+    ContentTypeError,
+    InvalidURL,
+    ServerConnectionError,
+    ServerDisconnectedError,
+    ServerFingerprintMismatch,
+    ServerTimeoutError,
+    TooManyRedirects,
+    WSServerHandshakeError,
 )
 from .client_reqrep import (
-    SSL_ALLOWED_TYPES as SSL_ALLOWED_TYPES,
-    ClientRequest as ClientRequest,
-    ClientResponse as ClientResponse,
-    Fingerprint as Fingerprint,
-    RequestInfo as RequestInfo,
+    SSL_ALLOWED_TYPES,
+    ClientRequest,
+    ClientResponse,
+    Fingerprint,
+    RequestInfo,
 )
 from .client_ws import (
     DEFAULT_WS_CLIENT_TIMEOUT,
-    ClientWebSocketResponse as ClientWebSocketResponse,
+    ClientWebSocketResponse,
     ClientWSTimeout,
 )
-from .connector import (
-    BaseConnector as BaseConnector,
-    NamedPipeConnector as NamedPipeConnector,
-    TCPConnector as TCPConnector,
-    UnixConnector as UnixConnector,
-)
+from .connector import BaseConnector, NamedPipeConnector, TCPConnector, UnixConnector
 from .cookiejar import CookieJar
 from .helpers import (
     _SENTINEL,
@@ -131,10 +130,10 @@ __all__ = (
 )
 
 
-try:
+if TYPE_CHECKING:
     from ssl import SSLContext
-except ImportError:  # pragma: no cover
-    SSLContext = object  # type: ignore[misc,assignment]
+else:
+    SSLContext = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -191,6 +190,8 @@ class ClientSession:
         "_ws_response_class",
         "_trace_configs",
         "_read_bufsize",
+        "_max_line_size",
+        "_max_field_size",
     )
 
     def __init__(
@@ -218,6 +219,8 @@ class ClientSession:
         requote_redirect_url: bool = True,
         trace_configs: Optional[List[TraceConfig]] = None,
         read_bufsize: int = 2**16,
+        max_line_size: int = 8190,
+        max_field_size: int = 8190,
     ) -> None:
         if base_url is None or isinstance(base_url, URL):
             self._base_url: Optional[URL] = base_url
@@ -266,6 +269,8 @@ class ClientSession:
         self._trust_env = trust_env
         self._requote_redirect_url = requote_redirect_url
         self._read_bufsize = read_bufsize
+        self._max_line_size = max_line_size
+        self._max_field_size = max_field_size
 
         # Convert to list of tuples
         if headers:
@@ -293,21 +298,16 @@ class ClientSession:
         )
 
     def __del__(self, _warnings: Any = warnings) -> None:
-        try:
-            if not self.closed:
-                _warnings.warn(
-                    f"Unclosed client session {self!r}",
-                    ResourceWarning,
-                    source=self,
-                )
-                context = {"client_session": self, "message": "Unclosed client session"}
-                if self._source_traceback is not None:
-                    context["source_traceback"] = self._source_traceback
-                self._loop.call_exception_handler(context)
-        except AttributeError:
-            # loop was not initialized yet,
-            # either self._connector or self._loop doesn't exist
-            pass
+        if not self.closed:
+            _warnings.warn(
+                f"Unclosed client session {self!r}",
+                ResourceWarning,
+                source=self,
+            )
+            context = {"client_session": self, "message": "Unclosed client session"}
+            if self._source_traceback is not None:
+                context["source_traceback"] = self._source_traceback
+            self._loop.call_exception_handler(context)
 
     def request(
         self, method: str, url: StrOrURL, **kwargs: Any
@@ -347,12 +347,15 @@ class ClientSession:
         proxy: Optional[StrOrURL] = None,
         proxy_auth: Optional[BasicAuth] = None,
         timeout: Union[ClientTimeout, _SENTINEL, None] = sentinel,
-        ssl: Optional[Union[SSLContext, bool, Fingerprint]] = None,
+        ssl: Optional[Union[SSLContext, Literal[False], Fingerprint]] = None,
+        server_hostname: Optional[str] = None,
         proxy_headers: Optional[LooseHeaders] = None,
         trace_request_ctx: Optional[SimpleNamespace] = None,
         read_bufsize: Optional[int] = None,
+        auto_decompress: Optional[bool] = None,
+        max_line_size: Optional[int] = None,
+        max_field_size: Optional[int] = None,
     ) -> ClientResponse:
-
         # NOTE: timeout clamps existing connect and read timeouts.  We cannot
         # set the default to None because we need to detect if the user wants
         # to use the existing timeouts by setting timeout to None.
@@ -376,6 +379,7 @@ class ClientSession:
         redirects = 0
         history = []
         version = self._version
+        params = params or {}
 
         # Merge with default headers and transform to CIMultiDict
         headers = self._prepare_headers(headers)
@@ -411,6 +415,15 @@ class ClientSession:
         if read_bufsize is None:
             read_bufsize = self._read_bufsize
 
+        if auto_decompress is None:
+            auto_decompress = self._auto_decompress
+
+        if max_line_size is None:
+            max_line_size = self._max_line_size
+
+        if max_field_size is None:
+            max_field_size = self._max_field_size
+
         traces = [
             Trace(
                 self,
@@ -440,11 +453,7 @@ class ClientSession:
                         auth = self._default_auth
                     # It would be confusing if we support explicit
                     # Authorization header with auth argument
-                    if (
-                        headers is not None
-                        and auth is not None
-                        and hdrs.AUTHORIZATION in headers
-                    ):
+                    if auth is not None and hdrs.AUTHORIZATION in headers:
                         raise ValueError(
                             "Cannot combine AUTHORIZATION header "
                             "with AUTH argument or credentials "
@@ -486,8 +495,10 @@ class ClientSession:
                         timer=timer,
                         session=self,
                         ssl=ssl,
+                        server_hostname=server_hostname,
                         proxy_headers=proxy_headers,
                         traces=traces,
+                        trust_env=self.trust_env,
                     )
 
                     # connection timeout
@@ -512,10 +523,12 @@ class ClientSession:
                         timer=timer,
                         skip_payload=method.upper() == "HEAD",
                         read_until_eof=read_until_eof,
-                        auto_decompress=self._auto_decompress,
+                        auto_decompress=auto_decompress,
                         read_timeout=real_timeout.sock_read,
                         read_bufsize=read_bufsize,
                         timeout_ceil_threshold=self._connector._timeout_ceil_threshold,
+                        max_line_size=max_line_size,
+                        max_field_size=max_field_size,
                     )
 
                     try:
@@ -540,7 +553,6 @@ class ClientSession:
 
                     # redirects
                     if resp.status in (301, 302, 303, 307, 308) and allow_redirects:
-
                         for trace in traces:
                             await trace.send_request_redirect(
                                 method, url.update_query(params), headers, resp
@@ -604,7 +616,7 @@ class ClientSession:
                             headers.pop(hdrs.AUTHORIZATION, None)
 
                         url = parsed_url
-                        params = None
+                        params = {}
                         resp.release()
                         continue
 
@@ -654,7 +666,7 @@ class ClientSession:
         url: StrOrURL,
         *,
         method: str = hdrs.METH_GET,
-        protocols: Iterable[str] = (),
+        protocols: Collection[str] = (),
         timeout: Union[ClientWSTimeout, float, _SENTINEL, None] = sentinel,
         receive_timeout: Optional[float] = None,
         autoclose: bool = True,
@@ -666,7 +678,7 @@ class ClientSession:
         headers: Optional[LooseHeaders] = None,
         proxy: Optional[StrOrURL] = None,
         proxy_auth: Optional[BasicAuth] = None,
-        ssl: Union[SSLContext, bool, None, Fingerprint] = None,
+        ssl: Union[SSLContext, Literal[False], None, Fingerprint] = None,
         proxy_headers: Optional[LooseHeaders] = None,
         compress: int = 0,
         max_msg_size: int = 4 * 1024 * 1024,
@@ -700,7 +712,7 @@ class ClientSession:
         url: StrOrURL,
         *,
         method: str = hdrs.METH_GET,
-        protocols: Iterable[str] = (),
+        protocols: Collection[str] = (),
         timeout: Union[ClientWSTimeout, float, _SENTINEL, None] = sentinel,
         receive_timeout: Optional[float] = None,
         autoclose: bool = True,
@@ -712,7 +724,7 @@ class ClientSession:
         headers: Optional[LooseHeaders] = None,
         proxy: Optional[StrOrURL] = None,
         proxy_auth: Optional[BasicAuth] = None,
-        ssl: Union[SSLContext, bool, None, Fingerprint] = None,
+        ssl: Union[SSLContext, Literal[False], None, Fingerprint] = None,
         proxy_headers: Optional[LooseHeaders] = None,
         compress: int = 0,
         max_msg_size: int = 4 * 1024 * 1024,
@@ -749,7 +761,7 @@ class ClientSession:
 
         default_headers = {
             hdrs.UPGRADE: "websocket",
-            hdrs.CONNECTION: "upgrade",
+            hdrs.CONNECTION: "Upgrade",
             hdrs.SEC_WEBSOCKET_VERSION: "13",
         }
 
@@ -1006,7 +1018,7 @@ class ClientSession:
         return self._requote_redirect_url
 
     @property
-    def timeout(self) -> Union[object, ClientTimeout]:
+    def timeout(self) -> ClientTimeout:
         """Timeout for the session."""
         return self._timeout
 
@@ -1082,7 +1094,6 @@ class ClientSession:
 
 
 class _BaseRequestContextManager(Coroutine[Any, Any, _RetType], Generic[_RetType]):
-
     __slots__ = ("_coro", "_resp")
 
     def __init__(self, coro: Coroutine["asyncio.Future[Any]", None, _RetType]) -> None:
@@ -1092,7 +1103,7 @@ class _BaseRequestContextManager(Coroutine[Any, Any, _RetType], Generic[_RetType
         return self._coro.send(arg)
 
     def throw(self, arg: BaseException) -> None:  # type: ignore[override]
-        self._coro.throw(arg)
+        self._coro.throw(arg)  # type: ignore[unused-awaitable]
 
     def close(self) -> None:
         return self._coro.close()
@@ -1139,7 +1150,6 @@ class _WSRequestContextManager(_BaseRequestContextManager[ClientWebSocketRespons
 
 
 class _SessionRequestContextManager:
-
     __slots__ = ("_coro", "_resp", "_session")
 
     def __init__(
@@ -1195,6 +1205,8 @@ def request(
     version: HttpVersion = http.HttpVersion11,
     connector: Optional[BaseConnector] = None,
     read_bufsize: Optional[int] = None,
+    max_line_size: int = 8190,
+    max_field_size: int = 8190,
 ) -> _SessionRequestContextManager:
     """Constructs and sends a request.
 
@@ -1265,6 +1277,8 @@ def request(
             proxy=proxy,
             proxy_auth=proxy_auth,
             read_bufsize=read_bufsize,
+            max_line_size=max_line_size,
+            max_field_size=max_field_size,
         ),
         session,
     )

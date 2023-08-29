@@ -4,11 +4,10 @@ import binascii
 import dataclasses
 import hashlib
 import json
-from typing import Any, Iterable, Optional, Tuple, cast
+import sys
+from typing import Any, Final, Iterable, Optional, Tuple, cast
 
-import async_timeout
 from multidict import CIMultiDict
-from typing_extensions import Final
 
 from . import hdrs
 from .abc import AbstractStreamWriter
@@ -32,6 +31,11 @@ from .typedefs import JSONDecoder, JSONEncoder
 from .web_exceptions import HTTPBadRequest, HTTPException
 from .web_request import BaseRequest
 from .web_response import StreamResponse
+
+if sys.version_info >= (3, 11):
+    import asyncio as async_timeout
+else:
+    import async_timeout
 
 __all__ = (
     "WebSocketResponse",
@@ -138,11 +142,11 @@ class WebSocketResponse(StreamResponse):
 
     def _send_heartbeat(self) -> None:
         if self._heartbeat is not None and not self._closed:
-            assert self._loop is not None
+            assert self._loop is not None and self._writer is not None
             # fire-and-forget a task is not perfect but maybe ok for
             # sending ping. Otherwise we need a long-living heartbeat
             # task in the class.
-            self._loop.create_task(self._writer.ping())  # type: ignore[union-attr]
+            self._loop.create_task(self._writer.ping())  # type: ignore[unused-awaitable]
 
             if self._pong_response_cb is not None:
                 self._pong_response_cb.cancel()
@@ -469,7 +473,8 @@ class WebSocketResponse(StreamResponse):
             if msg.type == WSMsgType.CLOSE:
                 self._closing = True
                 self._close_code = msg.data
-                if not self._closed and self._autoclose:
+                # Could be closed while awaiting reader.
+                if not self._closed and self._autoclose:  # type: ignore[redundant-expr]
                     await self.close()
             elif msg.type == WSMsgType.CLOSING:
                 self._closing = True

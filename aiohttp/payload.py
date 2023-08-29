@@ -13,6 +13,7 @@ from typing import (
     Any,
     ByteString,
     Dict,
+    Final,
     Iterable,
     Optional,
     TextIO,
@@ -22,7 +23,6 @@ from typing import (
 )
 
 from multidict import CIMultiDict
-from typing_extensions import Final
 
 from . import hdrs
 from .abc import AbstractStreamWriter
@@ -132,7 +132,6 @@ class PayloadRegistry:
 
 
 class Payload(ABC):
-
     _default_content_type: str = "application/octet-stream"
     _size: Optional[int] = None
 
@@ -254,7 +253,6 @@ class StringPayload(BytesPayload):
         content_type: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
-
         if encoding is None:
             if content_type is None:
                 real_encoding = "utf-8"
@@ -318,7 +316,6 @@ class TextIOPayload(IOBasePayload):
         content_type: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
-
         if encoding is None:
             if content_type is None:
                 encoding = "utf-8"
@@ -391,7 +388,6 @@ class JsonPayload(BytesPayload):
         *args: Any,
         **kwargs: Any,
     ) -> None:
-
         super().__init__(
             dumps(value).encode(encoding),
             content_type=content_type,
@@ -414,14 +410,13 @@ else:
 
 
 class AsyncIterablePayload(Payload):
-
     _iter: Optional[_AsyncIterator] = None
 
     def __init__(self, value: _AsyncIterable, *args: Any, **kwargs: Any) -> None:
         if not isinstance(value, AsyncIterable):
             raise TypeError(
                 "value argument must support "
-                "collections.abc.AsyncIterablebe interface, "
+                "collections.abc.AsyncIterable interface, "
                 "got {!r}".format(type(value))
             )
 

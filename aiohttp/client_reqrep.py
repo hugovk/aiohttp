@@ -1,5 +1,6 @@
 import asyncio
 import codecs
+import contextlib
 import dataclasses
 import functools
 import io
@@ -16,6 +17,7 @@ from typing import (
     Dict,
     Iterable,
     List,
+    Literal,
     Mapping,
     Optional,
     Tuple,
@@ -37,6 +39,7 @@ from .client_exceptions import (
     InvalidURL,
     ServerFingerprintMismatch,
 )
+from .compression_utils import HAS_BROTLI
 from .formdata import FormData
 from .hdrs import CONTENT_TYPE
 from .helpers import (
@@ -44,14 +47,15 @@ from .helpers import (
     BasicAuth,
     HeadersMixin,
     TimerNoop,
+    basicauth_from_netrc,
     is_expected_content_type,
+    netrc_from_env,
     noop,
     parse_mimetype,
     reify,
     set_result,
 )
 from .http import SERVER_SOFTWARE, HttpVersion10, HttpVersion11, StreamWriter
-from .http_parser import HAS_BROTLI
 from .log import client_logger
 from .streams import StreamReader
 from .typedefs import (
@@ -72,7 +76,7 @@ except ImportError:  # pragma: no cover
 try:
     import cchardet as chardet
 except ImportError:  # pragma: no cover
-    import charset_normalizer as chardet  # type: ignore[no-redef]
+    import charset_normalizer as chardet
 
 
 __all__ = ("ClientRequest", "ClientResponse", "RequestInfo", "Fingerprint")
@@ -153,7 +157,7 @@ class ConnectionKey:
     host: str
     port: Optional[int]
     is_ssl: bool
-    ssl: Union[SSLContext, None, bool, Fingerprint]
+    ssl: Union[SSLContext, None, Literal[False], Fingerprint]
     proxy: Optional[URL]
     proxy_auth: Optional[BasicAuth]
     proxy_headers_hash: Optional[int]  # hash(CIMultiDict)
@@ -207,9 +211,11 @@ class ClientRequest:
         proxy_auth: Optional[BasicAuth] = None,
         timer: Optional[BaseTimerContext] = None,
         session: Optional["ClientSession"] = None,
-        ssl: Union[SSLContext, bool, Fingerprint, None] = None,
+        ssl: Union[SSLContext, Literal[False], Fingerprint, None] = None,
         proxy_headers: Optional[LooseHeaders] = None,
         traces: Optional[List["Trace"]] = None,
+        trust_env: bool = False,
+        server_hostname: Optional[str] = None,
     ):
         match = _CONTAINS_CONTROL_CHAR_RE.search(method)
         if match:
@@ -241,6 +247,7 @@ class ClientRequest:
         self.response_class: Type[ClientResponse] = real_response_class
         self._timer = timer if timer is not None else TimerNoop()
         self._ssl = ssl
+        self.server_hostname = server_hostname
 
         if loop.get_debug():
             self._source_traceback = traceback.extract_stack(sys._getframe(1))
@@ -251,7 +258,7 @@ class ClientRequest:
         self.update_auto_headers(skip_auto_headers)
         self.update_cookies(cookies)
         self.update_content_encoding(data)
-        self.update_auth(auth)
+        self.update_auth(auth, trust_env)
         self.update_proxy(proxy, proxy_auth, proxy_headers)
 
         self.update_body_from_data(data)
@@ -266,7 +273,7 @@ class ClientRequest:
         return self.url.scheme in ("https", "wss")
 
     @property
-    def ssl(self) -> Union["SSLContext", None, bool, Fingerprint]:
+    def ssl(self) -> Union["SSLContext", None, Literal[False], Fingerprint]:
         return self._ssl
 
     @property
@@ -428,10 +435,14 @@ class ClientRequest:
             if hdrs.CONTENT_LENGTH not in self.headers:
                 self.headers[hdrs.CONTENT_LENGTH] = str(len(self.body))
 
-    def update_auth(self, auth: Optional[BasicAuth]) -> None:
+    def update_auth(self, auth: Optional[BasicAuth], trust_env: bool = False) -> None:
         """Set basic auth."""
         if auth is None:
             auth = self.auth
+        if auth is None and trust_env and self.url.host is not None:
+            netrc_obj = netrc_from_env()
+            with contextlib.suppress(LookupError):
+                auth = basicauth_from_netrc(netrc_obj, self.url.host)
         if auth is None:
             return
 
@@ -472,7 +483,7 @@ class ClientRequest:
 
         # copy payload headers
         assert body.headers
-        for (key, value) in body.headers.items():
+        for key, value in body.headers.items():
             if key in self.headers:
                 continue
             if key in self.skip_auto_headers:
@@ -551,6 +562,8 @@ class ClientRequest:
                 protocol.set_exception(exc)
         except Exception as exc:
             protocol.set_exception(exc)
+        else:
+            protocol.start_timeout()
         finally:
             self._writer = None
 
@@ -660,7 +673,6 @@ class ClientRequest:
 
 
 class ClientResponse(HeadersMixin):
-
     # Some of these attributes are None when created,
     # but will be set by the start() method.
     # As the end user will likely never see the None values, we cheat the types below.
@@ -687,7 +699,7 @@ class ClientResponse(HeadersMixin):
         *,
         writer: "asyncio.Task[None]",
         continue100: Optional["asyncio.Future[bool]"],
-        timer: BaseTimerContext,
+        timer: Optional[BaseTimerContext],
         request_info: RequestInfo,
         traces: List["Trace"],
         loop: asyncio.AbstractEventLoop,
@@ -912,7 +924,7 @@ class ClientResponse(HeadersMixin):
             return
 
         self._closed = True
-        if self._loop is None or self._loop.is_closed():
+        if self._loop.is_closed():
             return
 
         if self._connection is not None:
@@ -964,7 +976,8 @@ class ClientResponse(HeadersMixin):
 
     def _notify_content(self) -> None:
         content = self.content
-        if content and content.exception() is None:
+        # content can be None here, but the types are cheated elsewhere.
+        if content and content.exception() is None:  # type: ignore[truthy-bool]
             content.set_exception(ClientConnectionError("Connection closed"))
         self._released = True
 

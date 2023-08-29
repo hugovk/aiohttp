@@ -32,8 +32,7 @@ Usage example::
              html = await fetch(client)
              print(html)
 
-     loop = asyncio.get_event_loop()
-     loop.run_until_complete(main())
+     asyncio.run(main())
 
 
 The client session supports the context manager protocol for self closing.
@@ -50,7 +49,7 @@ The client session supports the context manager protocol for self closing.
                          connector_owner=True, \
                          auto_decompress=True, \
                          read_bufsize=2**16, \
-                         requote_redirect_url=False, \
+                         requote_redirect_url=True, \
                          trust_env=False, \
                          trace_configs=None)
 
@@ -164,8 +163,7 @@ The client session supports the context manager protocol for self closing.
       connection pool between sessions without sharing session state:
       cookies etc.
 
-   :param bool auto_decompress: Automatically decompress response body,
-       ``True`` by default
+   :param bool auto_decompress: Automatically decompress response body (``True`` by default).
 
       .. versionadded:: 2.3
 
@@ -174,11 +172,16 @@ The client session supports the context manager protocol for self closing.
 
       .. versionadded:: 3.7
 
-   :param bool trust_env: Get proxies information from *HTTP_PROXY* /
-      *HTTPS_PROXY* environment variables if the parameter is ``True``
-      (``False`` by default).
+   :param bool trust_env: Trust environment settings for proxy configuration if the parameter
+      is ``True`` (``False`` by default). See :ref:`aiohttp-client-proxy-support` for
+      more information.
 
       Get proxy credentials from ``~/.netrc`` file if present.
+
+      Get HTTP Basic Auth credentials from :file:`~/.netrc` file if present.
+
+      If :envvar:`NETRC` environment variable is set, read from file specified
+      there rather than from :file:`~/.netrc`.
 
       .. seealso::
 
@@ -189,6 +192,10 @@ The client session supports the context manager protocol for self closing.
       .. versionchanged:: 3.0
 
          Added support for ``~/.netrc`` file.
+
+      .. versionchanged:: 3.9
+
+         Added support for reading HTTP Basic Auth credentials from :file:`~/.netrc` file.
 
    :param bool requote_redirect_url: Apply *URL requoting* for redirection URLs if
                                      automatic redirection is enabled (``True`` by
@@ -313,8 +320,9 @@ The client session supports the context manager protocol for self closing.
 
    .. attribute:: trust_env
 
-      Should get proxies information from HTTP_PROXY / HTTPS_PROXY environment
-      variables or ~/.netrc file if present
+      Trust environment settings for proxy configuration
+      or ~/.netrc file if present. See :ref:`aiohttp-client-proxy-support` for
+      more information.
 
       :class:`bool` default is ``False``
 
@@ -328,7 +336,7 @@ The client session supports the context manager protocol for self closing.
 
       .. versionadded:: 3.7
 
-   .. comethod:: request(method, url, *, params=None, data=None, json=None,\
+   .. method:: request(method, url, *, params=None, data=None, json=None,\
                          cookies=None, headers=None, skip_auto_headers=None, \
                          auth=None, allow_redirects=True,\
                          max_redirects=10,\
@@ -338,16 +346,19 @@ The client session supports the context manager protocol for self closing.
                          proxy=None, proxy_auth=None,\
                          timeout=sentinel, ssl=None, \
                          verify_ssl=None, fingerprint=None, \
-                         ssl_context=None, proxy_headers=None)
-      :async-with:
-      :coroutine:
+                         ssl_context=None, proxy_headers=None, \
+                         server_hostname=None, auto_decompress=None)
+      :async:
       :noindexentry:
 
-      Performs an asynchronous HTTP request. Returns a response object.
+      Performs an asynchronous HTTP request. Returns a response object that
+      should be used as an async context manager.
 
       :param str method: HTTP method
 
-      :param url: Request URL, :class:`str` or :class:`~yarl.URL`.
+      :param url: Request URL, :class:`~yarl.URL` or :class:`str` that will
+                  be encoded with :class:`~yarl.URL` (see :class:`~yarl.URL`
+                  to skip encoding).
 
       :param params: Mapping, iterable of tuple of *key*/*value* pairs or
                      string to be sent as parameters in the query
@@ -486,6 +497,13 @@ The client session supports the context manager protocol for self closing.
 
             Use ``ssl=aiohttp.Fingerprint(digest)``
 
+      :param str server_hostname: Sets or overrides the host name that the
+         target server’s certificate will be matched against.
+
+         See :py:meth:`asyncio.loop.create_connection` for more information.
+
+         .. versionadded:: 3.9
+
       :param ssl.SSLContext ssl_context: ssl context used for processing
          *HTTPS* requests (optional).
 
@@ -510,14 +528,17 @@ The client session supports the context manager protocol for self closing.
 
          .. versionadded:: 3.0
 
+      :param bool auto_decompress: Automatically decompress response body.
+         Overrides :attr:`ClientSession.auto_decompress`.
+         May be used to enable/disable auto decompression on a per-request basis.
+
       :return ClientResponse: a :class:`client response <ClientResponse>`
          object.
 
-   .. comethod:: get(url, *, allow_redirects=True, **kwargs)
-      :async-with:
-      :coroutine:
+   .. method:: get(url, *, allow_redirects=True, **kwargs)
+      :async:
 
-      Perform a ``GET`` request.
+      Perform a ``GET`` request. Returns an async context manager.
 
       In order to modify inner
       :meth:`request<aiohttp.ClientSession.request>`
@@ -531,31 +552,10 @@ The client session supports the context manager protocol for self closing.
       :return ClientResponse: a :class:`client response
                               <ClientResponse>` object.
 
-   .. comethod:: post(url, *, data=None, **kwargs)
-      :async-with:
-      :coroutine:
+   .. method:: post(url, *, data=None, **kwargs)
+      :async:
 
-      Perform a ``POST`` request.
-
-      In order to modify inner
-      :meth:`request<aiohttp.ClientSession.request>`
-      parameters, provide `kwargs`.
-
-
-      :param url: Request URL, :class:`str` or :class:`~yarl.URL`
-
-      :param data: Data to send in the body of the request; see
-                   :meth:`request<aiohttp.ClientSession.request>`
-                   for details (optional)
-
-      :return ClientResponse: a :class:`client response
-                              <ClientResponse>` object.
-
-   .. comethod:: put(url, *, data=None, **kwargs)
-      :async-with:
-      :coroutine:
-
-      Perform a ``PUT`` request.
+      Perform a ``POST`` request. Returns an async context manager.
 
       In order to modify inner
       :meth:`request<aiohttp.ClientSession.request>`
@@ -571,11 +571,29 @@ The client session supports the context manager protocol for self closing.
       :return ClientResponse: a :class:`client response
                               <ClientResponse>` object.
 
-   .. comethod:: delete(url, **kwargs)
-      :async-with:
-      :coroutine:
+   .. method:: put(url, *, data=None, **kwargs)
+      :async:
 
-      Perform a ``DELETE`` request.
+      Perform a ``PUT`` request. Returns an async context manager.
+
+      In order to modify inner
+      :meth:`request<aiohttp.ClientSession.request>`
+      parameters, provide `kwargs`.
+
+
+      :param url: Request URL, :class:`str` or :class:`~yarl.URL`
+
+      :param data: Data to send in the body of the request; see
+                   :meth:`request<aiohttp.ClientSession.request>`
+                   for details (optional)
+
+      :return ClientResponse: a :class:`client response
+                              <ClientResponse>` object.
+
+   .. method:: delete(url, **kwargs)
+      :async:
+
+      Perform a ``DELETE`` request. Returns an async context manager.
 
       In order to modify inner
       :meth:`request<aiohttp.ClientSession.request>`
@@ -586,11 +604,10 @@ The client session supports the context manager protocol for self closing.
       :return ClientResponse: a :class:`client response
                               <ClientResponse>` object.
 
-   .. comethod:: head(url, *, allow_redirects=False, **kwargs)
-      :async-with:
-      :coroutine:
+   .. method:: head(url, *, allow_redirects=False, **kwargs)
+      :async:
 
-      Perform a ``HEAD`` request.
+      Perform a ``HEAD`` request. Returns an async context manager.
 
       In order to modify inner
       :meth:`request<aiohttp.ClientSession.request>`
@@ -604,11 +621,10 @@ The client session supports the context manager protocol for self closing.
       :return ClientResponse: a :class:`client response
                               <ClientResponse>` object.
 
-   .. comethod:: options(url, *, allow_redirects=True, **kwargs)
-      :async-with:
-      :coroutine:
+   .. method:: options(url, *, allow_redirects=True, **kwargs)
+      :async:
 
-      Perform an ``OPTIONS`` request.
+      Perform an ``OPTIONS`` request. Returns an async context manager.
 
       In order to modify inner
       :meth:`request<aiohttp.ClientSession.request>`
@@ -623,11 +639,10 @@ The client session supports the context manager protocol for self closing.
       :return ClientResponse: a :class:`client response
                               <ClientResponse>` object.
 
-   .. comethod:: patch(url, *, data=None, **kwargs)
-      :async-with:
-      :coroutine:
+   .. method:: patch(url, *, data=None, **kwargs)
+      :async:
 
-      Perform a ``PATCH`` request.
+      Perform a ``PATCH`` request. Returns an async context manager.
 
       In order to modify inner
       :meth:`request<aiohttp.ClientSession.request>`
@@ -642,7 +657,7 @@ The client session supports the context manager protocol for self closing.
       :return ClientResponse: a :class:`client response
                               <ClientResponse>` object.
 
-   .. comethod:: ws_connect(url, *, method='GET', \
+   .. method:: ws_connect(url, *, method='GET', \
                             protocols=(), timeout=10.0,\
                             receive_timeout=None,\
                             auth=None,\
@@ -656,13 +671,14 @@ The client session supports the context manager protocol for self closing.
                             verify_ssl=None, fingerprint=None, \
                             ssl_context=None, proxy_headers=None, \
                             compress=0, max_msg_size=4194304)
-      :async-with:
-      :coroutine:
+      :async:
 
       Create a websocket connection. Returns a
-      :class:`ClientWebSocketResponse` object.
+      :class:`ClientWebSocketResponse` async context manager object.
 
-      :param url: Websocket server url, :class:`str` or :class:`~yarl.URL`
+      :param url: Websocket server url, :class:`~yarl.URL` or :class:`str` that
+                  will be encoded with :class:`~yarl.URL` (see :class:`~yarl.URL`
+                  to skip encoding).
 
       :param tuple protocols: Websocket protocols
 
@@ -785,7 +801,8 @@ The client session supports the context manager protocol for self closing.
          .. versionadded:: 3.5
 
 
-   .. comethod:: close()
+   .. method:: close()
+      :async:
 
       Close underlying connector.
 
@@ -810,7 +827,7 @@ keepaliving, cookies and complex connection stuff like properly configured SSL
 certification chaining.
 
 
-.. cofunction:: request(method, url, *, params=None, data=None, \
+.. function:: request(method, url, *, params=None, data=None, \
                         json=None,\
                         headers=None, cookies=None, auth=None, \
                         allow_redirects=True, max_redirects=10, \
@@ -820,14 +837,17 @@ certification chaining.
                         read_bufsize=None, \
                         connector=None, loop=None,\
                         read_until_eof=True, timeout=sentinel)
-   :async-with:
+   :async:
 
    Asynchronous context manager for performing an asynchronous HTTP
-   request. Returns a :class:`ClientResponse` response object.
+   request. Returns a :class:`ClientResponse` response object. Use as
+   an async context manager.
 
    :param str method: HTTP method
 
-   :param url: Requested URL, :class:`str` or :class:`~yarl.URL`
+   :param url: Request URL, :class:`~yarl.URL` or :class:`str` that will
+               be encoded with :class:`~yarl.URL` (see :class:`~yarl.URL`
+               to skip encoding).
 
    :param dict params: Parameters to be sent in the query
                        string of the new request (optional)
@@ -928,9 +948,6 @@ By default all *connectors* support *keep-alive connections* (behavior
 is controlled by *force_close* constructor's parameter).
 
 
-BaseConnector
-^^^^^^^^^^^^^
-
 .. class:: BaseConnector(*, keepalive_timeout=15, \
                          force_close=False, limit=100, limit_per_host=0, \
                          enable_cleanup_closed=False, loop=None)
@@ -993,11 +1010,13 @@ BaseConnector
 
       Read-only property.
 
-   .. comethod:: close()
+   .. method:: close()
+      :async:
 
       Close all opened connections.
 
-   .. comethod:: connect(request)
+   .. method:: connect(request)
+      :async:
 
       Get a free connection from pool or create new one if connection
       is absent in the pool.
@@ -1011,16 +1030,12 @@ BaseConnector
 
       :return: :class:`Connection` object.
 
-   .. comethod:: _create_connection(req)
+   .. method:: _create_connection(req)
+      :async:
 
       Abstract method for actual connection establishing, should be
       overridden in subclasses.
 
-
-
-
-TCPConnector
-^^^^^^^^^^^^
 
 .. class:: TCPConnector(*, ssl=None, verify_ssl=True, fingerprint=None, \
                  use_dns_cache=True, ttl_dns_cache=10, \
@@ -1157,9 +1172,6 @@ TCPConnector
       clear all cache otherwise.
 
 
-UnixConnector
-^^^^^^^^^^^^^
-
 .. class:: UnixConnector(path, *, conn_timeout=None, \
                          keepalive_timeout=30, limit=100, \
                          force_close=False, loop=None)
@@ -1191,9 +1203,6 @@ UnixConnector
 
       Path to *UNIX socket*, read-only :class:`str` property.
 
-
-Connection
-^^^^^^^^^^
 
 .. class:: Connection
 
@@ -1362,7 +1371,8 @@ Response object
 
       For :term:`keep-alive` support see :meth:`release`.
 
-   .. comethod:: read()
+   .. method:: read()
+      :async:
 
       Read the whole response's body as :class:`bytes`.
 
@@ -1390,7 +1400,8 @@ Response object
 
       Do nothing for success responses (less than 400).
 
-   .. comethod:: text(encoding=None)
+   .. method:: text(encoding=None)
+      :async:
 
       Read response's body and return decoded :class:`str` using
       specified *encoding* parameter.
@@ -1425,8 +1436,9 @@ Response object
 
             await resp.text('ISO-8859-1')
 
-   .. comethod:: json(*, encoding=None, loads=json.loads, \
+   .. method:: json(*, encoding=None, loads=json.loads, \
                       content_type='application/json')
+      :async:
 
       Read response's body as *JSON*, return :class:`dict` using
       specified *encoding* and *loader*. If data is not still available
@@ -1515,7 +1527,8 @@ manually.
 
       Returns exception if any occurs or returns None.
 
-   .. comethod:: ping(message=b'')
+   .. method:: ping(message=b'')
+      :async:
 
       Send :const:`~aiohttp.WSMsgType.PING` to peer.
 
@@ -1527,7 +1540,8 @@ manually.
 
          The method is converted into :term:`coroutine`
 
-   .. comethod:: pong(message=b'')
+   .. method:: pong(message=b'')
+      :async:
 
       Send :const:`~aiohttp.WSMsgType.PONG` to peer.
 
@@ -1539,7 +1553,8 @@ manually.
 
          The method is converted into :term:`coroutine`
 
-   .. comethod:: send_str(data, compress=None)
+   .. method:: send_str(data, compress=None)
+      :async:
 
       Send *data* to peer as :const:`~aiohttp.WSMsgType.TEXT` message.
 
@@ -1556,7 +1571,8 @@ manually.
          The method is converted into :term:`coroutine`,
          *compress* parameter added.
 
-   .. comethod:: send_bytes(data, compress=None)
+   .. method:: send_bytes(data, compress=None)
+      :async:
 
       Send *data* to peer as :const:`~aiohttp.WSMsgType.BINARY` message.
 
@@ -1574,7 +1590,8 @@ manually.
          The method is converted into :term:`coroutine`,
          *compress* parameter added.
 
-   .. comethod:: send_json(data, compress=None, *, dumps=json.dumps)
+   .. method:: send_json(data, compress=None, *, dumps=json.dumps)
+      :async:
 
       Send *data* to peer as JSON string.
 
@@ -1600,7 +1617,8 @@ manually.
          The method is converted into :term:`coroutine`,
          *compress* parameter added.
 
-   .. comethod:: close(*, code=WSCloseCode.OK, message=b'')
+   .. method:: close(*, code=WSCloseCode.OK, message=b'')
+      :async:
 
       A :ref:`coroutine<coroutine>` that initiates closing handshake by sending
       :const:`~aiohttp.WSMsgType.CLOSE` message. It waits for
@@ -1612,7 +1630,8 @@ manually.
       :param message: optional payload of *close* message,
          :class:`str` (converted to *UTF-8* encoded bytes) or :class:`bytes`.
 
-   .. comethod:: receive()
+   .. method:: receive()
+      :async:
 
       A :ref:`coroutine<coroutine>` that waits upcoming *data*
       message from peer and returns it.
@@ -1627,7 +1646,8 @@ manually.
 
       :return: :class:`~aiohttp.WSMessage`
 
-   .. coroutinemethod:: receive_str()
+   .. method:: receive_str()
+      :async:
 
       A :ref:`coroutine<coroutine>` that calls :meth:`receive` but
       also asserts the message type is
@@ -1637,7 +1657,8 @@ manually.
 
       :raise TypeError: if message is :const:`~aiohttp.WSMsgType.BINARY`.
 
-   .. coroutinemethod:: receive_bytes()
+   .. method:: receive_bytes()
+      :async:
 
       A :ref:`coroutine<coroutine>` that calls :meth:`receive` but
       also asserts the message type is
@@ -1647,7 +1668,8 @@ manually.
 
       :raise TypeError: if message is :const:`~aiohttp.WSMsgType.TEXT`.
 
-   .. coroutinemethod:: receive_json(*, loads=json.loads)
+   .. method:: receive_json(*, loads=json.loads)
+      :async:
 
       A :ref:`coroutine<coroutine>` that calls :meth:`receive_str` and loads
       the JSON string to a Python dict.
@@ -1666,9 +1688,6 @@ manually.
 Utilities
 ---------
 
-
-ClientTimeout
-^^^^^^^^^^^^^
 
 .. class:: ClientTimeout(*, total=None, connect=None, \
                          sock_connect=None, sock_read=None)
@@ -1735,9 +1754,6 @@ ClientTimeout
          on production environment.
 
 
-ETag
-^^^^
-
 .. class:: ETag(name, is_weak=False)
 
    Represents `ETag` identifier.
@@ -1752,8 +1768,6 @@ ETag
 
    .. versionadded:: 3.8
 
-RequestInfo
-^^^^^^^^^^^
 
 .. class:: RequestInfo()
 
@@ -1778,9 +1792,6 @@ RequestInfo
 
       .. versionadded:: 3.2
 
-
-BasicAuth
-^^^^^^^^^
 
 .. class:: BasicAuth(login, password='', encoding='latin1')
 
@@ -1821,9 +1832,6 @@ BasicAuth
 
       :return: encoded authentication data, :class:`str`.
 
-
-CookieJar
-^^^^^^^^^
 
 .. class:: CookieJar(*, unsafe=False, quote_cookie=True, treat_as_secure_origin = [])
 
@@ -2081,7 +2089,7 @@ All exceptions are available as members of *aiohttp* module.
 
     Represent Content-Disposition header
 
-    .. attribute:: value
+    .. attribute:: type
 
     A :class:`str` instance. Value of Content-Disposition header
     itself, e.g. ``attachment``.

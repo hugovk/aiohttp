@@ -4,8 +4,10 @@ import base64
 import datetime
 import gc
 import platform
+import sys
 import weakref
 from math import ceil, modf
+from pathlib import Path
 from unittest import mock
 from urllib.request import getproxies_environment
 
@@ -190,7 +192,6 @@ def test_basic_auth_from_not_url() -> None:
 
 
 class ReifyMixin:
-
     reify = NotImplemented
 
     def test_reify(self) -> None:
@@ -448,25 +449,37 @@ def test_ceil_call_later_no_timeout() -> None:
 
 async def test_ceil_timeout_none(loop) -> None:
     async with helpers.ceil_timeout(None) as cm:
-        assert cm.deadline is None
+        if sys.version_info >= (3, 11):
+            assert cm.when() is None
+        else:
+            assert cm.deadline is None
 
 
 async def test_ceil_timeout_round(loop) -> None:
     async with helpers.ceil_timeout(7.5) as cm:
-        frac, integer = modf(cm.deadline)
+        if sys.version_info >= (3, 11):
+            frac, integer = modf(cm.when())
+        else:
+            frac, integer = modf(cm.deadline)
         assert frac == 0
 
 
 async def test_ceil_timeout_small(loop) -> None:
     async with helpers.ceil_timeout(1.1) as cm:
-        frac, integer = modf(cm.deadline)
+        if sys.version_info >= (3, 11):
+            frac, integer = modf(cm.when())
+        else:
+            frac, integer = modf(cm.deadline)
         # a chance for exact integer with zero fraction is negligible
         assert frac != 0
 
 
 async def test_ceil_timeout_small_with_overriden_threshold(loop) -> None:
     async with helpers.ceil_timeout(1.5, ceil_threshold=1) as cm:
-        frac, integer = modf(cm.deadline)
+        if sys.version_info >= (3, 11):
+            frac, integer = modf(cm.when())
+        else:
+            frac, integer = modf(cm.deadline)
         assert frac == 0
 
 
@@ -975,3 +988,86 @@ def test_populate_with_cookies():
 )
 def test_parse_http_date(value, expected):
     assert parse_http_date(value) == expected
+
+
+@pytest.mark.parametrize(
+    ["netrc_contents", "expected_username"],
+    [
+        (
+            "machine example.com login username password pass\n",
+            "username",
+        ),
+    ],
+    indirect=("netrc_contents",),
+)
+@pytest.mark.usefixtures("netrc_contents")
+def test_netrc_from_env(expected_username: str):
+    """Test that reading netrc files from env works as expected"""
+    netrc_obj = helpers.netrc_from_env()
+    assert netrc_obj.authenticators("example.com")[0] == expected_username
+
+
+@pytest.fixture
+def protected_dir(tmp_path: Path):
+    protected_dir = tmp_path / "protected"
+    protected_dir.mkdir()
+    try:
+        protected_dir.chmod(0o600)
+        yield protected_dir
+    finally:
+        protected_dir.rmdir()
+
+
+def test_netrc_from_home_does_not_raise_if_access_denied(
+    protected_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(Path, "home", lambda: protected_dir)
+    monkeypatch.delenv("NETRC", raising=False)
+
+    helpers.netrc_from_env()
+
+
+@pytest.mark.parametrize(
+    ["netrc_contents", "expected_auth"],
+    [
+        (
+            "machine example.com login username password pass\n",
+            helpers.BasicAuth("username", "pass"),
+        ),
+        (
+            "machine example.com account username password pass\n",
+            helpers.BasicAuth("username", "pass"),
+        ),
+        (
+            "machine example.com password pass\n",
+            helpers.BasicAuth("", "pass"),
+        ),
+    ],
+    indirect=("netrc_contents",),
+)
+@pytest.mark.usefixtures("netrc_contents")
+def test_basicauth_present_in_netrc(
+    expected_auth: helpers.BasicAuth,
+):
+    """Test that netrc file contents are properly parsed into BasicAuth tuples"""
+    netrc_obj = helpers.netrc_from_env()
+
+    assert expected_auth == helpers.basicauth_from_netrc(netrc_obj, "example.com")
+
+
+@pytest.mark.parametrize(
+    ["netrc_contents"],
+    [
+        ("",),
+    ],
+    indirect=("netrc_contents",),
+)
+@pytest.mark.usefixtures("netrc_contents")
+def test_read_basicauth_from_empty_netrc():
+    """Test that an error is raised if netrc doesn't have an entry for our host"""
+    netrc_obj = helpers.netrc_from_env()
+
+    with pytest.raises(
+        LookupError, match="No entry for example.com found in the `.netrc` file."
+    ):
+        helpers.basicauth_from_netrc(netrc_obj, "example.com")

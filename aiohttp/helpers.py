@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import binascii
+import contextlib
 import dataclasses
 import datetime
 import enum
@@ -27,6 +28,7 @@ from types import TracebackType
 from typing import (
     Any,
     Callable,
+    ContextManager,
     Dict,
     Generator,
     Generic,
@@ -36,42 +38,35 @@ from typing import (
     Mapping,
     Optional,
     Pattern,
+    Protocol,
     Tuple,
     Type,
     TypeVar,
     Union,
-    cast,
+    final,
+    get_args,
     overload,
 )
 from urllib.parse import quote
 from urllib.request import getproxies, proxy_bypass
 
-import async_timeout
 from multidict import CIMultiDict, MultiDict, MultiDictProxy
-from typing_extensions import Protocol, final
 from yarl import URL
 
 from . import hdrs
 from .log import client_logger
 from .typedefs import PathLike  # noqa
 
-if sys.version_info >= (3, 8):
-    from typing import get_args
+if sys.version_info >= (3, 11):
+    import asyncio as async_timeout
 else:
-    from typing_extensions import get_args
+    import async_timeout
 
 __all__ = ("BasicAuth", "ChainMapProxy", "ETag")
 
-PY_38 = sys.version_info >= (3, 8)
 PY_310 = sys.version_info >= (3, 10)
 
 COOKIE_MAX_LENGTH = 4096
-
-try:
-    from typing import ContextManager
-except ImportError:
-    from typing_extensions import ContextManager
-
 
 _T = TypeVar("_T")
 _S = TypeVar("_S")
@@ -117,16 +112,6 @@ TOKEN = CHAR ^ CTL ^ SEPARATORS
 class noop:
     def __await__(self) -> Generator[None, None, None]:
         yield
-
-
-if PY_38:
-    iscoroutinefunction = asyncio.iscoroutinefunction
-else:
-
-    def iscoroutinefunction(func: Any) -> bool:
-        while isinstance(func, functools.partial):
-            func = func.func
-        return asyncio.iscoroutinefunction(func)
 
 
 json_re = re.compile(r"(?:application/|[\w.-]+/[\w.+-]+?\+)json$", re.IGNORECASE)
@@ -234,8 +219,11 @@ def netrc_from_env() -> Optional[netrc.netrc]:
     except netrc.NetrcParseError as e:
         client_logger.warning("Could not parse .netrc file: %s", e)
     except OSError as e:
+        netrc_exists = False
+        with contextlib.suppress(OSError):
+            netrc_exists = netrc_path.is_file()
         # we couldn't read the file (doesn't exist, permissions, etc.)
-        if netrc_env or netrc_path.is_file():
+        if netrc_env or netrc_exists:
             # only warn if the environment wanted us to load it,
             # or it appears like the default file does actually exist
             client_logger.warning("Could not read .netrc file: %s", e)
@@ -247,6 +235,35 @@ def netrc_from_env() -> Optional[netrc.netrc]:
 class ProxyInfo:
     proxy: URL
     proxy_auth: Optional[BasicAuth]
+
+
+def basicauth_from_netrc(netrc_obj: Optional[netrc.netrc], host: str) -> BasicAuth:
+    """
+    Return :py:class:`~aiohttp.BasicAuth` credentials for ``host`` from ``netrc_obj``.
+
+    :raises LookupError: if ``netrc_obj`` is :py:data:`None` or if no
+            entry is found for the ``host``.
+    """
+    if netrc_obj is None:
+        raise LookupError("No .netrc file found")
+    auth_from_netrc = netrc_obj.authenticators(host)
+
+    if auth_from_netrc is None:
+        raise LookupError(f"No entry for {host!s} found in the `.netrc` file.")
+    login, account, password = auth_from_netrc
+
+    # TODO(PY311): username = login or account
+    # Up to python 3.10, account could be None if not specified,
+    # and login will be empty string if not specified. From 3.11,
+    # login and account will be empty string if not specified.
+    username = login if (login or account is None) else account
+
+    # TODO(PY311): Remove this, as password will be empty string
+    # if not specified
+    if password is None:
+        password = ""
+
+    return BasicAuth(username, password)
 
 
 def proxies_from_env() -> Dict[str, ProxyInfo]:
@@ -266,16 +283,11 @@ def proxies_from_env() -> Dict[str, ProxyInfo]:
             )
             continue
         if netrc_obj and auth is None:
-            auth_from_netrc = None
             if proxy.host is not None:
-                auth_from_netrc = netrc_obj.authenticators(proxy.host)
-            if auth_from_netrc is not None:
-                # auth_from_netrc is a (`user`, `account`, `password`) tuple,
-                # `user` and `account` both can be username,
-                # if `user` is None, use `account`
-                *logins, password = auth_from_netrc
-                login = logins[0] if logins[0] else logins[-1]
-                auth = BasicAuth(cast(str, login), cast(str, password))
+                try:
+                    auth = basicauth_from_netrc(netrc_obj, proxy.host)
+                except LookupError:
+                    auth = None
         ret[proto] = ProxyInfo(proxy, auth)
     return ret
 
@@ -580,7 +592,7 @@ def _weakref_handle(info: "Tuple[weakref.ref[object], str]") -> None:
 def weakref_handle(
     ob: object,
     name: str,
-    timeout: float,
+    timeout: Optional[float],
     loop: asyncio.AbstractEventLoop,
     timeout_ceil_threshold: float = 5,
 ) -> Optional[asyncio.TimerHandle]:
@@ -595,7 +607,7 @@ def weakref_handle(
 
 def call_later(
     cb: Callable[[], Any],
-    timeout: float,
+    timeout: Optional[float],
     loop: asyncio.AbstractEventLoop,
     timeout_ceil_threshold: float = 5,
 ) -> Optional[asyncio.TimerHandle]:
@@ -658,7 +670,8 @@ class TimeoutHandle:
 
 
 class BaseTimerContext(ContextManager["BaseTimerContext"]):
-    pass
+    def assert_timeout(self) -> None:
+        """Raise TimeoutError if timeout has been exceeded."""
 
 
 class TimerNoop(BaseTimerContext):
@@ -682,6 +695,11 @@ class TimerContext(BaseTimerContext):
         self._tasks: List[asyncio.Task[Any]] = []
         self._cancelled = False
 
+    def assert_timeout(self) -> None:
+        """Raise TimeoutError if timer has already been cancelled."""
+        if self._cancelled:
+            raise asyncio.TimeoutError from None
+
     def __enter__(self) -> BaseTimerContext:
         task = asyncio.current_task(loop=self._loop)
 
@@ -703,7 +721,7 @@ class TimerContext(BaseTimerContext):
         exc_tb: Optional[TracebackType],
     ) -> Optional[bool]:
         if self._tasks:
-            self._tasks.pop()
+            self._tasks.pop()  # type: ignore[unused-awaitable]
 
         if exc_type is asyncio.CancelledError and self._cancelled:
             raise asyncio.TimeoutError from None
@@ -732,7 +750,6 @@ def ceil_timeout(
 
 
 class HeadersMixin:
-
     __slots__ = ("_content_type", "_content_dict", "_stored_content_type")
 
     def __init__(self) -> None:
@@ -750,7 +767,7 @@ class HeadersMixin:
         else:
             msg = HeaderParser().parsestr("Content-Type: " + raw)
             self._content_type = msg.get_content_type()
-            params = msg.get_params()
+            params = msg.get_params(())
             self._content_dict = dict(params[1:])  # First element is content type again
 
     @property
@@ -811,8 +828,11 @@ class AppKey(Generic[_T]):
                 module: str = frame.f_globals["__name__"]
                 break
             frame = frame.f_back
+        else:
+            raise RuntimeError("Failed to get module name.")
 
-        self._name = module + "." + name
+        # https://github.com/python/mypy/issues/14209
+        self._name = module + "." + name  # type: ignore[possibly-undefined]
         self._t = t
 
     def __lt__(self, other: object) -> bool:

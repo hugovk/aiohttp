@@ -50,7 +50,7 @@ endif
 	@python -m pip install --upgrade pip
 
 .install-cython: .update-pip $(call to-hash,requirements/cython.txt)
-	@python -m pip install -r requirements/cython.txt -c requirements/constraints.txt
+	@python -m pip install -r requirements/cython.in -c requirements/cython.txt
 	@touch .install-cython
 
 aiohttp/_find_header.c: $(call to-hash,aiohttp/hdrs.py ./tools/gen.py)
@@ -74,7 +74,7 @@ generate-llhttp: .llhttp-gen
 cythonize: .install-cython $(PYXS:.pyx=.c)
 
 .install-deps: .install-cython $(PYXS:.pyx=.c) $(call to-hash,$(CYS) $(REQS))
-	@python -m pip install -r requirements/dev.txt -c requirements/constraints.txt
+	@python -m pip install -r requirements/dev.in -c requirements/dev.txt
 	@touch .install-deps
 
 .PHONY: lint
@@ -89,7 +89,7 @@ mypy:
 	mypy
 
 .develop: .install-deps generate-llhttp $(call to-hash,$(PYS) $(CYS) $(CS))
-	python -m pip install -e . -c requirements/constraints.txt
+	python -m pip install -e . -c requirements/runtime-deps.txt
 	@touch .develop
 
 .PHONY: test
@@ -117,11 +117,7 @@ define run_tests_in_docker
 	docker run --rm -ti -v `pwd`:/src -w /src "aiohttp-test-$(1)-$(2)" $(TEST_SPEC)
 endef
 
-.PHONY: test-3.7-no-extensions test-3.7 test-3.8-no-extensions test-3.8 test-3.9-no-extensions test-3.9 test-3.10-no-extensions test-3.10
-test-3.7-no-extensions:
-	$(call run_tests_in_docker,3.7,y)
-test-3.7:
-	$(call run_tests_in_docker,3.7,n)
+.PHONY: test-3.8-no-extensions test-3.8 test-3.9-no-extensions test
 test-3.8-no-extensions:
 	$(call run_tests_in_docker,3.8,y)
 test-3.8:
@@ -181,15 +177,17 @@ doc:
 doc-spelling:
 	@make -C docs spelling SPHINXOPTS="-W --keep-going -n -E"
 
-.PHONY: compile-deps
-compile-deps: .update-pip $(REQS)
-	pip-compile --no-header --allow-unsafe -q --strip-extras \
-		-o requirements/constraints.txt \
-		requirements/constraints.in
-
 .PHONY: install
 install: .update-pip
-	@python -m pip install -r requirements/dev.txt -c requirements/constraints.txt
+	@python -m pip install -r requirements/dev.in -c requirements/dev.txt
 
 .PHONY: install-dev
 install-dev: .develop
+
+.PHONY: sync-direct-runtime-deps
+sync-direct-runtime-deps:
+	@echo Updating 'requirements/runtime-deps.in' from 'setup.cfg'... >&2
+	@echo '# Extracted from `setup.cfg` via `make sync-direct-runtime-deps`' > requirements/runtime-deps.in
+	@echo >> requirements/runtime-deps.in
+	@python -c 'from configparser import ConfigParser; from itertools import chain; from pathlib import Path; cfg = ConfigParser(); cfg.read_string(Path("setup.cfg").read_text()); print("\n".join(line.strip() for line in chain(cfg["options"].get("install_requires").splitlines(), "\n".join(cfg["options.extras_require"].values()).splitlines()) if line.strip()))' \
+		>> requirements/runtime-deps.in
