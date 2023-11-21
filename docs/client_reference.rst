@@ -51,13 +51,16 @@ The client session supports the context manager protocol for self closing.
                          read_bufsize=2**16, \
                          requote_redirect_url=True, \
                          trust_env=False, \
-                         trace_configs=None)
+                         trace_configs=None, \
+                         fallback_charset_resolver=lambda r, b: "utf-8")
 
    The class for creating client sessions and making requests.
 
 
    :param base_url: Base part of the URL (optional)
-      If set it allows to skip the base part in request calls.
+      If set, it allows to skip the base part (https://docs.aiohttp.org) in
+      request calls. If base_url includes a path (as in
+      https://docs.aiohttp.org/en/stable) the path is ignored/discarded.
 
       .. versionadded:: 3.8
 
@@ -207,6 +210,16 @@ The client session supports the context manager protocol for self closing.
                          tracing.  ``None`` (default) is used for request tracing
                          disabling.  See :ref:`aiohttp-client-tracing-reference` for
                          more information.
+
+   :param Callable[[ClientResponse,bytes],str] fallback_charset_resolver:
+      A :term:`callable` that accepts a :class:`ClientResponse` and the
+      :class:`bytes` contents, and returns a :class:`str` which will be used as
+      the encoding parameter to :meth:`bytes.decode()`.
+
+      This function will be called when the charset is not known (e.g. not specified in the
+      Content-Type header). The default function simply defaults to ``utf-8``.
+
+      .. versionadded:: 3.8.6
 
    .. attribute:: closed
 
@@ -1303,7 +1316,7 @@ Response object
       Reading from the stream may raise
       :exc:`aiohttp.ClientPayloadError` if the response object is
       closed before response receives all data or in case if any
-      transfer encoding related errors like misformed chunked
+      transfer encoding related errors like malformed chunked
       encoding of broken compression data.
 
    .. attribute:: cookies
@@ -1406,12 +1419,8 @@ Response object
       Read response's body and return decoded :class:`str` using
       specified *encoding* parameter.
 
-      If *encoding* is ``None`` content encoding is autocalculated
-      using ``Content-Type`` HTTP header and *charset-normalizer* tool if the
-      header is not provided by server.
-
-      :term:`cchardet` is used with fallback to :term:`charset-normalizer` if
-      *cchardet* is not available.
+      If *encoding* is ``None`` content encoding is determined from the
+      Content-Type header, or using the ``fallback_charset_resolver`` function.
 
       Close underlying connection if data reading gets an error,
       release connection otherwise.
@@ -1420,21 +1429,11 @@ Response object
                            ``None`` for encoding autodetection
                            (default).
 
+
+      :raises: :exc:`UnicodeDecodeError` if decoding fails. See also
+               :meth:`get_encoding`.
+
       :return str: decoded *BODY*
-
-      :raise LookupError: if the encoding detected by cchardet is
-                          unknown by Python (e.g. VISCII).
-
-      .. note::
-
-         If response has no ``charset`` info in ``Content-Type`` HTTP
-         header :term:`cchardet` / :term:`charset-normalizer` is used for
-         content encoding autodetection.
-
-         It may hurt performance. If page encoding is known passing
-         explicit *encoding* parameter might help::
-
-            await resp.text('ISO-8859-1')
 
    .. method:: json(*, encoding=None, loads=json.loads, \
                       content_type='application/json')
@@ -1442,13 +1441,9 @@ Response object
 
       Read response's body as *JSON*, return :class:`dict` using
       specified *encoding* and *loader*. If data is not still available
-      a ``read`` call will be done,
+      a ``read`` call will be done.
 
-      If *encoding* is ``None`` content encoding is autocalculated
-      using :term:`cchardet` or :term:`charset-normalizer` as fallback if
-      *cchardet* is not available.
-
-      if response's `content-type` does not match `content_type` parameter
+      If response's `content-type` does not match `content_type` parameter
       :exc:`aiohttp.ContentTypeError` get raised.
       To disable content type check pass ``None`` value.
 
@@ -1480,17 +1475,9 @@ Response object
 
    .. method:: get_encoding()
 
-      Automatically detect content encoding using ``charset`` info in
-      ``Content-Type`` HTTP header. If this info is not exists or there
-      are no appropriate codecs for encoding then :term:`cchardet` /
-      :term:`charset-normalizer` is used.
-
-      Beware that it is not always safe to use the result of this function to
-      decode a response. Some encodings detected by cchardet are not known by
-      Python (e.g. VISCII). *charset-normalizer* is not concerned by that issue.
-
-      :raise RuntimeError: if called before the body has been read,
-                           for :term:`cchardet` usage
+      Retrieve content encoding using ``charset`` info in ``Content-Type`` HTTP header.
+      If no charset is present or the charset is not understood by Python, the
+      ``fallback_charset_resolver`` function associated with the ``ClientSession`` is called.
 
       .. versionadded:: 3.0
 
@@ -1521,7 +1508,15 @@ manually.
 
    .. method:: get_extra_info(name, default=None)
 
-      Reads extra info from connection's transport
+      Reads optional extra information from the connection's transport.
+      If no value associated with ``name`` is found, ``default`` is returned.
+
+      See :meth:`asyncio.BaseTransport.get_extra_info`
+
+      :param str name: The key to look up in the transport extra information.
+
+      :param default: Default value to be used when no value for ``name`` is
+                      found (default is ``None``).
 
    .. method:: exception()
 
@@ -2143,13 +2138,6 @@ Response errors
       .. deprecated:: 3.1
 
 
-.. class:: WSServerHandshakeError
-
-   Web socket server response error.
-
-   Derived from :exc:`ClientResponseError`
-
-
 .. class:: ContentTypeError
 
    Invalid content type.
@@ -2169,6 +2157,13 @@ Response errors
    Derived from :exc:`ClientResponseError`
 
    .. versionadded:: 3.2
+
+
+.. class:: WSServerHandshakeError
+
+   Web socket server response error.
+
+   Derived from :exc:`ClientResponseError`
 
 Connection errors
 ^^^^^^^^^^^^^^^^^
@@ -2196,14 +2191,6 @@ Connection errors
 
    Derived from :exc:`ClientConnectorError`
 
-.. class:: UnixClientConnectorError
-
-   Derived from :exc:`ClientConnectorError`
-
-.. class:: ServerConnectionError
-
-   Derived from :exc:`ClientConnectionError`
-
 .. class:: ClientSSLError
 
    Derived from :exc:`ClientConnectorError`
@@ -2220,6 +2207,14 @@ Connection errors
 
    Derived from :exc:`ClientSSLError` and :exc:`ssl.CertificateError`
 
+.. class:: UnixClientConnectorError
+
+   Derived from :exc:`ClientConnectorError`
+
+.. class:: ServerConnectionError
+
+   Derived from :exc:`ClientConnectionError`
+
 .. class:: ServerDisconnectedError
 
    Server disconnected.
@@ -2231,17 +2226,17 @@ Connection errors
       Partially parsed HTTP message (optional).
 
 
-.. class:: ServerTimeoutError
-
-   Server operation timeout: read timeout, etc.
-
-   Derived from :exc:`ServerConnectionError` and :exc:`asyncio.TimeoutError`
-
 .. class:: ServerFingerprintMismatch
 
    Server fingerprint mismatch.
 
    Derived from :exc:`ServerConnectionError`
+
+.. class:: ServerTimeoutError
+
+   Server operation timeout: read timeout, etc.
+
+   Derived from :exc:`ServerConnectionError` and :exc:`asyncio.TimeoutError`
 
 
 Hierarchy of exceptions
@@ -2249,33 +2244,40 @@ Hierarchy of exceptions
 
 * :exc:`ClientError`
 
-  * :exc:`ClientResponseError`
-
-    * :exc:`ContentTypeError`
-    * :exc:`WSServerHandshakeError`
-    * :exc:`~aiohttp.ClientHttpProxyError`
-
   * :exc:`ClientConnectionError`
 
     * :exc:`ClientOSError`
 
       * :exc:`ClientConnectorError`
 
-         * :exc:`ClientSSLError`
+        * :exc:`ClientProxyConnectionError`
 
-           * :exc:`ClientConnectorCertificateError`
+        * :exc:`ClientSSLError`
 
-           * :exc:`ClientConnectorSSLError`
+          * :exc:`ClientConnectorCertificateError`
 
-         * :exc:`ClientProxyConnectionError`
+          * :exc:`ClientConnectorSSLError`
 
-      * :exc:`ServerConnectionError`
+        * :exc:`UnixClientConnectorError`
 
-         * :exc:`ServerDisconnectedError`
-         * :exc:`ServerTimeoutError`
+    * :exc:`ServerConnectionError`
+
+      * :exc:`ServerDisconnectedError`
 
       * :exc:`ServerFingerprintMismatch`
 
+      * :exc:`ServerTimeoutError`
+
   * :exc:`ClientPayloadError`
+
+  * :exc:`ClientResponseError`
+
+    * :exc:`~aiohttp.ClientHttpProxyError`
+
+    * :exc:`ContentTypeError`
+
+    * :exc:`TooManyRedirects`
+
+    * :exc:`WSServerHandshakeError`
 
   * :exc:`InvalidURL`

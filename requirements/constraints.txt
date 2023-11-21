@@ -4,7 +4,7 @@
 #
 #    pip-compile --allow-unsafe --output-file=requirements/constraints.txt --resolver=backtracking --strip-extras requirements/constraints.in
 #
-aiodns==3.0.0 ; sys_platform == "linux" or sys_platform == "darwin"
+aiodns==3.1.1 ; sys_platform == "linux" or sys_platform == "darwin"
     # via -r requirements/runtime-deps.in
 aiohttp-theme==0.1.6
     # via -r requirements/doc.in
@@ -22,12 +22,10 @@ babel==2.12.1
     # via sphinx
 blockdiag==3.0.0
     # via sphinxcontrib-blockdiag
-brotli==1.0.9
+brotli==1.1.0 ; platform_python_implementation == "CPython"
     # via -r requirements/runtime-deps.in
 build==0.10.0
     # via pip-tools
-cchardet==2.1.7 ; python_version < "3.10"
-    # via -r requirements/runtime-deps.in
 certifi==2023.7.22
     # via requests
 cffi==1.15.1
@@ -37,23 +35,18 @@ cffi==1.15.1
 cfgv==3.3.1
     # via pre-commit
 charset-normalizer==3.2.0
-    # via
-    #   -r requirements/runtime-deps.in
-    #   requests
-cherry-picker==2.1.0
+    # via requests
+cherry-picker==2.2.0
     # via -r requirements/dev.in
 click==8.1.6
     # via
     #   cherry-picker
-    #   click-default-group
     #   pip-tools
     #   slotscheck
     #   towncrier
     #   typer
     #   wait-for-it
-click-default-group==1.2.2
-    # via towncrier
-coverage==7.3.0
+coverage==7.3.2
     # via
     #   -r requirements/test.in
     #   pytest-cov
@@ -61,7 +54,7 @@ cryptography==41.0.3
     # via
     #   pyjwt
     #   trustme
-cython==3.0.2
+cython==3.0.5
     # via -r requirements/cython.in
 distlib==0.3.7
     # via virtualenv
@@ -71,8 +64,6 @@ exceptiongroup==1.1.2
     # via pytest
 filelock==3.12.2
     # via virtualenv
-freezegun==1.2.2
-    # via -r requirements/test.in
 frozenlist==1.4.0
     # via
     #   -r requirements/runtime-deps.in
@@ -94,7 +85,7 @@ imagesize==1.4.1
     # via sphinx
 importlib-metadata==6.8.0
     # via sphinx
-importlib-resources==6.0.0
+importlib-resources==6.1.0
     # via towncrier
 incremental==22.10.0
     # via towncrier
@@ -111,7 +102,7 @@ multidict==6.0.4
     #   -r requirements/multidict.in
     #   -r requirements/runtime-deps.in
     #   yarl
-mypy==1.5.1 ; implementation_name == "cpython"
+mypy==1.7.0 ; implementation_name == "cpython"
     # via
     #   -r requirements/lint.in
     #   -r requirements/test.in
@@ -135,7 +126,7 @@ platformdirs==3.10.0
     # via virtualenv
 pluggy==1.2.0
     # via pytest
-pre-commit==3.3.3
+pre-commit==3.5.0
     # via -r requirements/lint.in
 proxy-py==2.4.3
     # via -r requirements/test.in
@@ -150,10 +141,12 @@ pyenchant==3.2.2
 pygments==2.15.1
     # via sphinx
 pyjwt==2.8.0
-    # via gidgethub
+    # via
+    #   gidgethub
+    #   pyjwt
 pyproject-hooks==1.0.0
     # via build
-pytest==7.4.0
+pytest==7.4.3
     # via
     #   -r requirements/lint.in
     #   -r requirements/test.in
@@ -161,12 +154,14 @@ pytest==7.4.0
     #   pytest-mock
 pytest-cov==4.1.0
     # via -r requirements/test.in
-pytest-mock==3.11.1
+pytest-mock==3.12.0
     # via -r requirements/test.in
 python-dateutil==2.8.2
-    # via freezegun
-python-on-whales==0.64.2
+    # via time-machine
+python-on-whales==0.67.0
     # via -r requirements/test.in
+pytz==2023.3.post1
+    # via babel
 pyyaml==6.0.1
     # via pre-commit
 re-assert==1.1.0
@@ -181,8 +176,10 @@ requests==2.31.0
 setuptools-git==1.2
     # via -r requirements/test.in
 six==1.16.0
-    # via python-dateutil
-slotscheck==0.17.0
+    # via
+    #   python-dateutil
+    #   sphinx
+slotscheck==0.17.1
     # via -r requirements/lint.in
 snowballstemmer==2.2.0
     # via sphinx
@@ -208,13 +205,14 @@ sphinxcontrib-serializinghtml==1.1.5
     # via sphinx
 sphinxcontrib-spelling==8.0.0 ; platform_system != "Windows"
     # via -r requirements/doc-spelling.in
-sphinxcontrib-towncrier==0.3.2a0
+sphinxcontrib-towncrier==0.4.0a0
     # via -r requirements/doc.in
-toml==0.10.2
-    # via cherry-picker
+time-machine==2.13.0 ; implementation_name == "cpython"
+    # via -r requirements/test.in
 tomli==2.0.1
     # via
     #   build
+    #   cherry-picker
     #   coverage
     #   mypy
     #   pip-tools
@@ -222,7 +220,7 @@ tomli==2.0.1
     #   pytest
     #   slotscheck
     #   towncrier
-towncrier==23.6.0
+towncrier==23.11.0
     # via
     #   -r requirements/doc.in
     #   sphinxcontrib-towncrier
@@ -244,7 +242,7 @@ uritemplate==4.1.1
     # via gidgethub
 urllib3==2.0.4
     # via requests
-uvloop==0.17.0 ; platform_system != "Windows" and python_version < "3.12"
+uvloop==0.19.0 ; platform_system != "Windows"
     # via
     #   -r requirements/base.in
     #   -r requirements/lint.in
@@ -258,7 +256,7 @@ wheel==0.41.0
     # via pip-tools
 yarl==1.9.2
     # via -r requirements/runtime-deps.in
-zipp==3.16.2
+zipp==3.17.0
     # via
     #   importlib-metadata
     #   importlib-resources
@@ -271,3 +269,4 @@ setuptools==68.0.0
     #   blockdiag
     #   nodeenv
     #   pip-tools
+    #   sphinx
