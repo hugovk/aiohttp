@@ -616,7 +616,7 @@ class Response(StreamResponse):
                 if charset is None:
                     charset = "utf-8"
                 real_headers[hdrs.CONTENT_TYPE] = content_type + "; charset=" + charset
-                body = text.encode(charset)
+                body = text.encode(charset, replace="backslashreplace")
                 text = None
         else:
             if hdrs.CONTENT_TYPE in real_headers:
